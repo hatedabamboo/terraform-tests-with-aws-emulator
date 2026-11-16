@@ -1,7 +1,6 @@
 # Testing Terraform with AWS Emulator
 
-An AWS stack, built with Terraform, that runs against [AWS Emulator](https://github.com/aws/aws-emulator) to test the changes.
-
+An AWS stack, built with Terraform, that runs against [AWS Emulator](https://github.com/aws/aws-emulator) to test the changes. Example code for the article "[Testing Terraform with AWS Emulator](notes.hatedabamboo.me/terraform-tests-with-aws-emulator/)."
 
 ## Layout
 
