@@ -1,0 +1,89 @@
+name: terraform-against-emulator
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      EMULATOR_PORT: "9297"
+      # Empty keys make the provider fall back to the shared credentials
+      # file that the emulator writes. insecure=false verifies the
+      # emulator cert through AWS_CA_BUNDLE
+      TF_VAR_access_key: ""
+      TF_VAR_secret_key: ""
+      TF_VAR_insecure: "false"
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the AWS Emulator
+        run: |
+          curl -fsSLo aws-emulator.deb \
+            https://downloads.aws.com/aws-emulator/packages/aws-emulator/LTS/latest/aws-emulator_amd64.deb
+          sudo apt-get install -y ./aws-emulator.deb
+          aws-emulator -v
+
+      - name: Start the emulator with signature checks on
+        run: |
+          nohup aws-emulator > /tmp/aws-emulator.log 2>&1 &
+          echo "Waiting for the emulator to answer..."
+          CA="$HOME/.aws/emulator/${EMULATOR_PORT}/ca.pem"
+          for i in $(seq 30); do
+            if [ -f "$CA" ] && curl -sf --cacert "$CA" \
+                "https://127.0.0.1:${EMULATOR_PORT}/__admin/health" >/dev/null; then
+              echo "Emulator is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Emulator did not become ready." >&2
+          cat /tmp/aws-emulator.log >&2
+          exit 1
+
+      - name: Point Terraform at the emulator credentials and certificate
+        run: |
+          DIR="$HOME/.aws/emulator/${EMULATOR_PORT}"
+          {
+            echo "AWS_SHARED_CREDENTIALS_FILE=$DIR/emulator_credentials"
+            echo "AWS_CONFIG_FILE=$DIR/config"
+            echo "AWS_CA_BUNDLE=$DIR/ca.pem"
+            echo "AWS_REGION=us-east-1"
+            echo "AWS_DEFAULT_REGION=us-east-1"
+            echo "AWS_EC2_METADATA_DISABLED=true"
+            echo "AWS_DISABLE_HOST_PREFIX_INJECTION=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.17.2"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform -chdir=terraform init -input=false
+
+      - name: Terraform format check
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: terraform -chdir=terraform validate
+
+      - name: Terraform plan
+        run: terraform -chdir=terraform plan -input=false
+
+      - name: Terraform apply
+        run: terraform -chdir=terraform apply -auto-approve -input=false
+
+      - name: Emulator log on failure
+        if: failure()
+        run: cat /tmp/aws-emulator.log || true
